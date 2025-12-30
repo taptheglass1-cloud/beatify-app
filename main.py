@@ -3,7 +3,6 @@ import time
 import re
 import cloudinary
 import cloudinary.uploader
-import cloudinary.api
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,7 +27,7 @@ async def get_data():
     try:
         songs = supabase.table("songs").select("*").order("created_at", desc=True).execute()
         return {"songs": songs.data}
-    except:
+    except Exception as e:
         return {"songs": []}
 
 @app.post("/api/upload")
@@ -40,22 +39,32 @@ async def upload(
     tracks: list[UploadFile] = File(...)
 ):
     try:
-        ts = int(time.time())
+        # Default cover if none provided
         cover_url = "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=1000"
-        if cover:
+        
+        if cover and cover.filename:
             c_res = cloudinary.uploader.upload(await cover.read(), folder="beatify/covers")
             cover_url = c_res.get("secure_url")
 
         for t in tracks:
+            if not t.filename: continue
             clean_title = re.sub(r'\.(mp3|wav|ogg|m4a|flac)$', '', t.filename, flags=re.IGNORECASE)
-            t_res = cloudinary.uploader.upload(await t.read(), resource_type="video", folder=f"beatify/tracks/{user_email}")
+            
+            # CRITICAL FIX: resource_type="auto" allows Cloudinary to detect Audio/MP3 correctly
+            t_res = cloudinary.uploader.upload(await t.read(), resource_type="auto", folder=f"beatify/tracks/{user_email}")
             
             supabase.table("songs").insert({
-                "artist": artist_name, "album": album, "title": clean_title, 
-                "track_url": t_res.get("secure_url"), "cover_url": cover_url, "uploaded_by": user_email 
+                "artist": artist_name, 
+                "album": album, 
+                "title": clean_title, 
+                "track_url": t_res.get("secure_url"), 
+                "cover_url": cover_url, 
+                "uploaded_by": user_email 
             }).execute()
+            
         return {"status": "success"}
     except Exception as e:
+        print(f"UPLOAD ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/delete_song/{id}")
@@ -80,12 +89,12 @@ def index():
         body { background: var(--bg); color: white; font-family: 'Plus Jakarta Sans', sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; }
         .sidebar { width: 280px; background: black; padding: 24px; display: flex; flex-direction: column; gap: 8px; border-right: 1px solid var(--border); }
         .main { flex: 1; overflow-y: auto; background: linear-gradient(to bottom, #181818, #000000); padding: 40px; padding-bottom: 120px; }
-        .nav-item { padding: 14px 20px; border-radius: 8px; display: flex; align-items: center; gap: 16px; color: var(--text-dim); cursor: pointer; font-weight: 700; text-decoration: none; }
+        .nav-item { padding: 14px 20px; border-radius: 8px; display: flex; align-items: center; gap: 16px; color: var(--text-dim); cursor: pointer; font-weight: 700; }
         .nav-item:hover, .nav-item.active { background: var(--panel); color: white; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 24px; }
         .card { background: #181818; padding: 16px; border-radius: 12px; cursor: pointer; border: 1px solid transparent; }
-        .card:hover { background: #282828; transform: translateY(-5px); }
-        .card img { width: 100%; aspect-ratio: 1; border-radius: 8px; object-fit: cover; margin-bottom: 16px; box-shadow: 0 12px 30px rgba(0,0,0,0.5); }
+        .card:hover { background: #282828; transform: translateY(-5px); border-color: var(--border); }
+        .card img { width: 100%; aspect-ratio: 1; border-radius: 8px; object-fit: cover; margin-bottom: 16px; }
         .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 100px; background: black; border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 30px; z-index: 1000; }
         .p-info { width: 30%; display: flex; align-items: center; gap: 15px; }
         .p-controls { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 10px; }
@@ -96,14 +105,14 @@ def index():
         .btn-play { background: white; color: black; width: 45px; height: 45px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; cursor: pointer; }
         .v-input { background: #2a2a2a; border: 1px solid var(--border); padding: 14px; border-radius: 6px; color: white; width: 100%; margin-bottom: 15px; }
         .upload-card { background: var(--panel); padding: 30px; border-radius: 16px; border: 1px solid var(--border); }
-        .chip { padding: 6px 15px; border-radius: 20px; background: var(--glass); font-size: 12px; cursor: pointer; border: 1px solid var(--border); }
-        .chip.active { background: var(--primary); color: black; border: none; }
+        .chip { padding: 6px 15px; border-radius: 20px; background: var(--glass); font-size: 12px; cursor: pointer; }
+        .chip.active { background: var(--primary); color: black; }
         #loader { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 9999; flex-direction: column; align-items: center; justify-content: center; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-    <div id="loader"><div style="width:50px;height:50px;border:4px solid var(--glass);border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite"></div><h3 id="l-text"></h3></div>
+    <div id="loader"><div style="width:50px;height:50px;border:4px solid var(--glass);border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite"></div><h3 id="l-text">Uploading...</h3></div>
     <div class="sidebar">
         <h2 style="padding:0 15px; color:var(--primary)"><i class="fa-brands fa-spotify"></i> Beatify</h2>
         <div class="nav-item" id="n-home" onclick="show('home')"><i class="fa-solid fa-house"></i> Home</div>
@@ -167,16 +176,14 @@ def index():
             let h = '<h1>Discovery</h1><div class="grid">';
             Object.values(albums).forEach(a => {
                 const isSgl = a.title === 'Single';
-                // Escape apostrophes for the click event
-                const titleParam = a.title.replace(/'/g, "\\\\'");
-                const clickParam = isSgl ? a.songs[0].id : `'${titleParam}'`;
+                const clickParam = isSgl ? a.songs[0].id : `'${a.title.replace(/'/g, "\\\\'")}'`;
                 h += `<div class="card" onclick="openMedia(${clickParam}, ${isSgl})">
                         <img src="${a.cover}">
-                        <b>${isSgl ? a.songs[0].title : a.title}</b>
+                        <b>${isSgl ? a.songs[0].title : a.title}</b><br>
                         <small>${a.artist} • ${a.title}</small>
                       </div>`;
             });
-            c.innerHTML = h + '</div>';
+            c.innerHTML = h || '<p>No music found.</p>';
         } else if(view === 'upload') {
             if(!user) return show('login');
             document.getElementById('n-up').classList.add('active');
@@ -189,104 +196,72 @@ def index():
                     </div>
                     <input class="v-input" id="u-alb" placeholder="${isSingle?'Track Title':'Album Name'}">
                     <p>Artwork</p><input type="file" id="u-cov" accept="image/*">
-                    <p>Audio Files</p><input type="file" id="u-tracks" ${isSingle?'':'multiple'} accept="audio/*">
+                    <p>Audio</p><input type="file" id="u-tracks" ${isSingle?'':'multiple'} accept="audio/*">
                     <button class="btn-play" style="width:100%; border-radius:8px; margin-top:20px" onclick="doUp()">Publish</button>
                 </div>
-                <div class="upload-card"><h2>Your Library</h2>`;
-            const mine = db.songs.filter(s => s.uploaded_by === user.email);
-            if(mine.length === 0) h += '<p style="color:var(--text-dim)">Your uploads will appear here.</p>';
-            mine.forEach(s => {
+                <div class="upload-card"><h2>Library</h2>`;
+            db.songs.filter(s => s.uploaded_by === user.email).forEach(s => {
                 h += `<div style="display:flex; justify-content:space-between; padding:12px; background:var(--glass); border-radius:8px; margin-bottom:8px">
                     <div><b>${s.title}</b><br><small>${s.album}</small></div>
-                    <i class="fa-solid fa-trash" style="color:#ff4444; cursor:pointer" onclick="delSong(${s.id})"></i>
+                    <i class="fa-solid fa-trash" style="color:red; cursor:pointer" onclick="delSong(${s.id})"></i>
                 </div>`;
             });
             c.innerHTML = h + '</div></div>';
         } else if(view === 'login') {
-            c.innerHTML = `
-                <div class="upload-card" style="max-width:400px; margin:50px auto">
-                    <h2 id="atitle">${isSignUp?'Create Account':'Sign In'}</h2>
-                    <input class="v-input" id="l-user" placeholder="Username">
-                    <input class="v-input" id="l-ps" type="password" placeholder="Password">
-                    <button class="btn-play" style="width:100%; border-radius:8px" onclick="doAuth()">Continue</button>
-                    <center style="margin-top:20px">
-                        <small style="color:var(--text-dim); cursor:pointer" onclick="toggleSign()">${isSignUp?'Already have an account? Sign In':'Don\\'t have an account? Sign Up'}</small>
-                    </center>
-                </div>`;
+            c.innerHTML = `<div class="upload-card" style="max-width:400px; margin:50px auto"><h2>${isSignUp?'Join':'Sign In'}</h2><input class="v-input" id="l-user" placeholder="Username"><input class="v-input" id="l-ps" type="password" placeholder="Password"><button class="btn-play" style="width:100%; border-radius:8px" onclick="doAuth()">Continue</button><p onclick="toggleSign()" style="cursor:pointer; text-align:center; margin-top:20px"><small>${isSignUp?'Login':'Sign Up'}</small></p></div>`;
         }
     }
 
-    function toggleSign() { isSignUp = !isSignUp; show('login'); }
-    function setMode(val) { isSingle = val; show('upload'); }
-
-    function openMedia(param, isSingleTrack) {
-        const tracks = isSingleTrack 
-            ? db.songs.filter(s => s.id == param) 
-            : db.songs.filter(s => s.album === param);
-        
-        if (tracks.length === 0) return;
-
-        let h = `<div style="display:flex; gap:40px; margin-bottom:40px">
-                    <img src="${tracks[0].cover_url}" width="220" style="border-radius:12px; box-shadow: 0 20px 40px rgba(0,0,0,0.6)">
-                    <div>
-                        <h1 style="font-size:48px; margin:0">${isSingleTrack ? tracks[0].title : tracks[0].album}</h1>
-                        <b style="color:var(--primary)">${tracks[0].artist}</b>
-                        <p style="color:var(--text-dim)">${isSingleTrack ? 'Single' : 'Album'}</p>
-                    </div>
-                 </div>`;
-        
-        tracks.forEach((t, i) => {
-            const tUrl = t.track_url;
-            const tTitle = t.title.replace(/'/g, "\\\\'");
-            const tArt = t.artist.replace(/'/g, "\\\\'");
-            h += `<div class="nav-item" onclick="play('${tUrl}','${tTitle}','${tArt}','${t.cover_url}')">
-                    <span style="width:40px; color:var(--text-dim)">${i+1}</span>
-                    <div style="flex:1"><b>${t.title}</b></div>
-                    <i class="fa-solid fa-play" style="color:var(--primary)"></i>
-                  </div>`;
-        });
-        document.getElementById('content').innerHTML = h;
-    }
-
-    function play(url, title, artist, cover) {
-        document.getElementById('player').style.display = 'flex';
-        const a = document.getElementById('audio'); a.src = url; a.play();
-        document.getElementById('play-btn').className = "fa-solid fa-pause";
-        document.getElementById('p-info').innerHTML = `<img src="${cover}" width="50" height="50" style="border-radius:4px"><div><b>${title}</b><br><small>${artist}</small></div>`;
-    }
-
-    async function doAuth() {
-        const userIn = document.getElementById('l-user').value.trim();
-        const passIn = document.getElementById('l-ps').value;
-        if(!userIn || !passIn) return alert("Fill all fields");
-        const fakeEmail = `${userIn}@beatify.com`;
-        document.getElementById('loader').style.display = 'flex';
-        let res = isSignUp ? await _sb.auth.signUp({email: fakeEmail, password: passIn}) : await _sb.auth.signInWithPassword({email: fakeEmail, password: passIn});
-        if(res.error) { alert(res.error.message); document.getElementById('loader').style.display = 'none'; }
-        else location.reload();
-    }
-
     async function doUp() {
-        if(!document.getElementById('u-tracks').files[0]) return alert("Select music files!");
+        const tracks = document.getElementById('u-tracks').files;
+        if(!tracks.length) return alert("Select music!");
         document.getElementById('loader').style.display = 'flex';
-        document.getElementById('l-text').innerText = "Uploading to Cloud...";
         const fd = new FormData();
         fd.append('album', isSingle ? 'Single' : document.getElementById('u-alb').value);
         fd.append('artist_name', user.email.split('@')[0]);
         fd.append('user_email', user.email);
         fd.append('cover', document.getElementById('u-cov').files[0]);
-        for(let f of document.getElementById('u-tracks').files) fd.append('tracks', f);
-        await fetch('/api/upload', {method:'POST', body:fd});
-        location.reload();
+        for(let f of tracks) fd.append('tracks', f);
+        
+        try {
+            const r = await fetch('/api/upload', {method:'POST', body:fd});
+            if(!r.ok) throw new Error(await r.text());
+            location.reload();
+        } catch(e) {
+            alert("Upload failed: " + e.message);
+            document.getElementById('loader').style.display = 'none';
+        }
     }
 
-    async function delSong(id) { if(confirm('Delete this track permanently?')) { await fetch(`/api/delete_song/${id}?user_email=${user.email}`, {method:'DELETE'}); location.reload(); }}
+    function toggleSign() { isSignUp = !isSignUp; show('login'); }
+    function setMode(v) { isSingle = v; show('upload'); }
+    async function delSong(id) { if(confirm('Delete?')) { await fetch(`/api/delete_song/${id}?user_email=${user.email}`, {method:'DELETE'}); location.reload(); }}
+    function openMedia(p, s) { 
+        const tracks = s ? db.songs.filter(x => x.id == p) : db.songs.filter(x => x.album === p);
+        let h = `<div style="display:flex; gap:30px; margin-bottom:30px"><img src="${tracks[0].cover_url}" width="200" style="border-radius:12px"><div><h1>${s ? tracks[0].title : tracks[0].album}</h1><b>${tracks[0].artist}</b></div></div>`;
+        tracks.forEach((t, i) => {
+            h += `<div class="nav-item" onclick="play('${t.track_url}','${t.title.replace(/'/g,"\\\\'")}','${t.artist.replace(/'/g,"\\\\'")}','${t.cover_url}')"><span>${i+1}</span><div style="flex:1"><b>${t.title}</b></div><i class="fa-solid fa-play"></i></div>`;
+        });
+        document.getElementById('content').innerHTML = h;
+    }
+    function play(u, t, a, c) { 
+        document.getElementById('player').style.display = 'flex';
+        const audio = document.getElementById('audio'); audio.src = u; audio.play();
+        document.getElementById('play-btn').className = "fa-solid fa-pause";
+        document.getElementById('p-info').innerHTML = `<img src="${c}" width="50" height="50" style="border-radius:4px"><div><b>${t}</b><br><small>${a}</small></div>`;
+    }
     function togglePlay() { const a=document.getElementById('audio'); if(a.paused){a.play(); document.getElementById('play-btn').className="fa-solid fa-pause";} else {a.pause(); document.getElementById('play-btn').className="fa-solid fa-play";}}
     function setVol(v) { document.getElementById('audio').volume = v; }
     function updateProg() { const a=document.getElementById('audio'); if(a.duration) document.getElementById('prog-range').value = (a.currentTime/a.duration)*100; document.getElementById('cur-time').innerText=fmt(a.currentTime);}
     function initDur() { document.getElementById('dur-time').innerText=fmt(document.getElementById('audio').duration);}
     function fmt(s) { const m=Math.floor(s/60); const sec=Math.floor(s%60); return m+":"+(sec<10?"0":"")+sec;}
     function seek(v) { const a=document.getElementById('audio'); a.currentTime=(v/100)*a.duration;}
+    async function doAuth() {
+        const u = document.getElementById('l-user').value, p = document.getElementById('l-ps').value;
+        const e = `${u}@beatify.com`;
+        let res = isSignUp ? await _sb.auth.signUp({email:e, password:p}) : await _sb.auth.signInWithPassword({email:e, password:p});
+        if(res.error) alert(res.error.message); else location.reload();
+    }
     async function logout() { await _sb.auth.signOut(); location.reload(); }
     init();
 </script>
