@@ -70,7 +70,7 @@ def index():
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Beatify | Cloud Studio</title>
+    <title>Beatify | Studio</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -106,7 +106,7 @@ def index():
     <div id="loader"><div style="width:50px;height:50px;border:4px solid var(--glass);border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite"></div><h3 id="l-text"></h3></div>
     <div class="sidebar">
         <h2 style="padding:0 15px; color:var(--primary)"><i class="fa-brands fa-spotify"></i> Beatify</h2>
-        <div class="nav-item active" id="n-home" onclick="show('home')"><i class="fa-solid fa-house"></i> Home</div>
+        <div class="nav-item" id="n-home" onclick="show('home')"><i class="fa-solid fa-house"></i> Home</div>
         <div class="nav-item" id="n-up" onclick="show('upload')"><i class="fa-solid fa-plus"></i> Studio</div>
         <div style="margin-top:auto; padding:15px; border-top:1px solid var(--border)" id="profile-zone"></div>
     </div>
@@ -127,7 +127,7 @@ def index():
 
 <script>
     const _sb = supabase.createClient('https://zwtoztttsqamceuusvoi.supabase.co', 'sb_publishable_nxc75Aw211BgANYDwF09zQ_OFQXzGEO');
-    let db = { songs: [] }, user = null, isSingle = false;
+    let db = { songs: [] }, user = null, isSingle = false, isSignUp = false;
 
     async function init() {
         const { data } = await _sb.auth.getSession();
@@ -145,8 +145,13 @@ def index():
 
     function renderProfile() {
         const p = document.getElementById('profile-zone');
-        if(user) p.innerHTML = `<div style="font-size:12px; color:var(--text-dim); margin-bottom:10px">${user.email}</div><button class="chip" style="width:100%" onclick="logout()">Logout</button>`;
-        else p.innerHTML = `<button class="chip active" style="width:100%" onclick="show('login')">Sign In</button>`;
+        if(user) {
+            // Display only the username part (before @)
+            const username = user.email.split('@')[0];
+            p.innerHTML = `<div style="font-size:14px; font-weight:800; color:white; margin-bottom:5px">@${username}</div><button class="chip" style="width:100%" onclick="logout()">Logout</button>`;
+        } else {
+            p.innerHTML = `<button class="chip active" style="width:100%" onclick="show('login')">Get Started</button>`;
+        }
     }
 
     function show(view) {
@@ -190,10 +195,20 @@ def index():
             });
             c.innerHTML = h + '</div></div>';
         } else if(view === 'login') {
-            c.innerHTML = `<div class="upload-card" style="max-width:400px; margin:50px auto"><h2>Sign In</h2><input class="v-input" id="l-em" placeholder="Email"><input class="v-input" id="l-ps" type="password" placeholder="Password"><button class="btn-play" style="width:100%; border-radius:8px" onclick="doAuth()">Continue</button></div>`;
+            c.innerHTML = `
+                <div class="upload-card" style="max-width:400px; margin:50px auto">
+                    <h2 id="atitle">${isSignUp?'Create Account':'Sign In'}</h2>
+                    <input class="v-input" id="l-user" placeholder="Username">
+                    <input class="v-input" id="l-ps" type="password" placeholder="Password">
+                    <button class="btn-play" style="width:100%; border-radius:8px" onclick="doAuth()">Continue</button>
+                    <center style="margin-top:20px">
+                        <small style="color:var(--text-dim); cursor:pointer" onclick="toggleSign()">${isSignUp?'Already have an account? Sign In':'Don\\'t have an account? Sign Up'}</small>
+                    </center>
+                </div>`;
         }
     }
 
+    function toggleSign() { isSignUp = !isSignUp; show('login'); }
     function setMode(val) { isSingle = val; show('upload'); }
 
     function openMedia(title, id) {
@@ -210,6 +225,32 @@ def index():
         const a = document.getElementById('audio'); a.src = url; a.play();
         document.getElementById('play-btn').className = "fa-solid fa-pause";
         document.getElementById('p-info').innerHTML = `<img src="${cover}" width="50" height="50" style="border-radius:4px"><div><b>${title}</b><br><small>${artist}</small></div>`;
+    }
+
+    async function doAuth() {
+        const userIn = document.getElementById('l-user').value.trim();
+        const passIn = document.getElementById('l-ps').value;
+        if(!userIn || !passIn) return alert("Fill all fields");
+        
+        // Treat username as an internal email for Supabase
+        const fakeEmail = `${userIn}@beatify.com`;
+        
+        document.getElementById('loader').style.display = 'flex';
+        document.getElementById('l-text').innerText = "Authenticating...";
+
+        let res;
+        if(isSignUp) {
+            res = await _sb.auth.signUp({email: fakeEmail, password: passIn});
+        } else {
+            res = await _sb.auth.signInWithPassword({email: fakeEmail, password: passIn});
+        }
+
+        if(res.error) {
+            alert(res.error.message);
+            document.getElementById('loader').style.display = 'none';
+        } else {
+            location.reload();
+        }
     }
 
     async function doUp() {
@@ -231,7 +272,6 @@ def index():
     function initDur() { document.getElementById('dur-time').innerText=fmt(document.getElementById('audio').duration);}
     function fmt(s) { const m=Math.floor(s/60); const sec=Math.floor(s%60); return m+":"+(sec<10?"0":"")+sec;}
     function seek(v) { const a=document.getElementById('audio'); a.currentTime=(v/100)*a.duration;}
-    async function doAuth() { const em=document.getElementById('l-em').value, ps=document.getElementById('l-ps').value; await _sb.auth.signInWithPassword({email:em, password:ps}); location.reload(); }
     async function logout() { await _sb.auth.signOut(); location.reload(); }
     init();
 </script>
