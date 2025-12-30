@@ -140,13 +140,12 @@ def index():
     async function loadData() {
         const r = await fetch('/api/data');
         const res = await r.json();
-        db.songs = res.songs;
+        db.songs = res.songs || [];
     }
 
     function renderProfile() {
         const p = document.getElementById('profile-zone');
         if(user) {
-            // Display only the username part (before @)
             const username = user.email.split('@')[0];
             p.innerHTML = `<div style="font-size:14px; font-weight:800; color:white; margin-bottom:5px">@${username}</div><button class="chip" style="width:100%" onclick="logout()">Logout</button>`;
         } else {
@@ -167,7 +166,15 @@ def index():
             });
             let h = '<h1>Discovery</h1><div class="grid">';
             Object.values(albums).forEach(a => {
-                h += `<div class="card" onclick="openMedia('${a.title}', ${a.title === 'Single' ? a.songs[0].id : 0})"><img src="${a.cover}"><b>${a.title === 'Single' ? a.songs[0].title : a.title}</b><small>${a.artist} • ${a.title}</small></div>`;
+                const isSgl = a.title === 'Single';
+                // Escape apostrophes for the click event
+                const titleParam = a.title.replace(/'/g, "\\\\'");
+                const clickParam = isSgl ? a.songs[0].id : `'${titleParam}'`;
+                h += `<div class="card" onclick="openMedia(${clickParam}, ${isSgl})">
+                        <img src="${a.cover}">
+                        <b>${isSgl ? a.songs[0].title : a.title}</b>
+                        <small>${a.artist} • ${a.title}</small>
+                      </div>`;
             });
             c.innerHTML = h + '</div>';
         } else if(view === 'upload') {
@@ -182,15 +189,16 @@ def index():
                     </div>
                     <input class="v-input" id="u-alb" placeholder="${isSingle?'Track Title':'Album Name'}">
                     <p>Artwork</p><input type="file" id="u-cov" accept="image/*">
-                    <p>Audio</p><input type="file" id="u-tracks" ${isSingle?'':'multiple'} accept="audio/*">
+                    <p>Audio Files</p><input type="file" id="u-tracks" ${isSingle?'':'multiple'} accept="audio/*">
                     <button class="btn-play" style="width:100%; border-radius:8px; margin-top:20px" onclick="doUp()">Publish</button>
                 </div>
                 <div class="upload-card"><h2>Your Library</h2>`;
             const mine = db.songs.filter(s => s.uploaded_by === user.email);
+            if(mine.length === 0) h += '<p style="color:var(--text-dim)">Your uploads will appear here.</p>';
             mine.forEach(s => {
                 h += `<div style="display:flex; justify-content:space-between; padding:12px; background:var(--glass); border-radius:8px; margin-bottom:8px">
                     <div><b>${s.title}</b><br><small>${s.album}</small></div>
-                    <i class="fa-solid fa-trash" style="color:red; cursor:pointer" onclick="delSong(${s.id})"></i>
+                    <i class="fa-solid fa-trash" style="color:#ff4444; cursor:pointer" onclick="delSong(${s.id})"></i>
                 </div>`;
             });
             c.innerHTML = h + '</div></div>';
@@ -211,11 +219,31 @@ def index():
     function toggleSign() { isSignUp = !isSignUp; show('login'); }
     function setMode(val) { isSingle = val; show('upload'); }
 
-    function openMedia(title, id) {
-        const tracks = id ? db.songs.filter(s => s.id === id) : db.songs.filter(s => s.album === title);
-        let h = `<div style="display:flex; gap:40px; margin-bottom:40px"><img src="${tracks[0].cover_url}" width="220" style="border-radius:12px"><div><h1>${id ? tracks[0].title : title}</h1><b>${tracks[0].artist}</b></div></div>`;
+    function openMedia(param, isSingleTrack) {
+        const tracks = isSingleTrack 
+            ? db.songs.filter(s => s.id == param) 
+            : db.songs.filter(s => s.album === param);
+        
+        if (tracks.length === 0) return;
+
+        let h = `<div style="display:flex; gap:40px; margin-bottom:40px">
+                    <img src="${tracks[0].cover_url}" width="220" style="border-radius:12px; box-shadow: 0 20px 40px rgba(0,0,0,0.6)">
+                    <div>
+                        <h1 style="font-size:48px; margin:0">${isSingleTrack ? tracks[0].title : tracks[0].album}</h1>
+                        <b style="color:var(--primary)">${tracks[0].artist}</b>
+                        <p style="color:var(--text-dim)">${isSingleTrack ? 'Single' : 'Album'}</p>
+                    </div>
+                 </div>`;
+        
         tracks.forEach((t, i) => {
-            h += `<div class="nav-item" onclick="play('${t.track_url}','${t.title}','${t.artist}','${t.cover_url}')"><span>${i+1}</span><div style="flex:1"><b>${t.title}</b></div><i class="fa-solid fa-play"></i></div>`;
+            const tUrl = t.track_url;
+            const tTitle = t.title.replace(/'/g, "\\\\'");
+            const tArt = t.artist.replace(/'/g, "\\\\'");
+            h += `<div class="nav-item" onclick="play('${tUrl}','${tTitle}','${tArt}','${t.cover_url}')">
+                    <span style="width:40px; color:var(--text-dim)">${i+1}</span>
+                    <div style="flex:1"><b>${t.title}</b></div>
+                    <i class="fa-solid fa-play" style="color:var(--primary)"></i>
+                  </div>`;
         });
         document.getElementById('content').innerHTML = h;
     }
@@ -231,30 +259,17 @@ def index():
         const userIn = document.getElementById('l-user').value.trim();
         const passIn = document.getElementById('l-ps').value;
         if(!userIn || !passIn) return alert("Fill all fields");
-        
-        // Treat username as an internal email for Supabase
         const fakeEmail = `${userIn}@beatify.com`;
-        
         document.getElementById('loader').style.display = 'flex';
-        document.getElementById('l-text').innerText = "Authenticating...";
-
-        let res;
-        if(isSignUp) {
-            res = await _sb.auth.signUp({email: fakeEmail, password: passIn});
-        } else {
-            res = await _sb.auth.signInWithPassword({email: fakeEmail, password: passIn});
-        }
-
-        if(res.error) {
-            alert(res.error.message);
-            document.getElementById('loader').style.display = 'none';
-        } else {
-            location.reload();
-        }
+        let res = isSignUp ? await _sb.auth.signUp({email: fakeEmail, password: passIn}) : await _sb.auth.signInWithPassword({email: fakeEmail, password: passIn});
+        if(res.error) { alert(res.error.message); document.getElementById('loader').style.display = 'none'; }
+        else location.reload();
     }
 
     async function doUp() {
+        if(!document.getElementById('u-tracks').files[0]) return alert("Select music files!");
         document.getElementById('loader').style.display = 'flex';
+        document.getElementById('l-text').innerText = "Uploading to Cloud...";
         const fd = new FormData();
         fd.append('album', isSingle ? 'Single' : document.getElementById('u-alb').value);
         fd.append('artist_name', user.email.split('@')[0]);
@@ -265,7 +280,7 @@ def index():
         location.reload();
     }
 
-    async function delSong(id) { if(confirm('Delete?')) { await fetch(`/api/delete_song/${id}?user_email=${user.email}`, {method:'DELETE'}); location.reload(); }}
+    async function delSong(id) { if(confirm('Delete this track permanently?')) { await fetch(`/api/delete_song/${id}?user_email=${user.email}`, {method:'DELETE'}); location.reload(); }}
     function togglePlay() { const a=document.getElementById('audio'); if(a.paused){a.play(); document.getElementById('play-btn').className="fa-solid fa-pause";} else {a.pause(); document.getElementById('play-btn').className="fa-solid fa-play";}}
     function setVol(v) { document.getElementById('audio').volume = v; }
     function updateProg() { const a=document.getElementById('audio'); if(a.duration) document.getElementById('prog-range').value = (a.currentTime/a.duration)*100; document.getElementById('cur-time').innerText=fmt(a.currentTime);}
@@ -278,3 +293,8 @@ def index():
 </body>
 </html>
 """
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
